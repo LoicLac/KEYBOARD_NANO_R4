@@ -24,11 +24,10 @@ void LedController::update(GameMode mode, const InputEvents& events,
   }
 
   // --- ÉTAPE 2: GESTION DES EFFETS D'AVANT-PLAN (INPUTS) ---
-  bool isInShiftMode = events.octPlus_isPressed || events.octMinus_isPressed;
+  bool isInShiftMode = events.octPlus_isLongPressed || events.octMinus_isLongPressed;
 
-  // Si on est en mode Shift, on affiche TOUJOURS la valeur du paramètre (pas besoin de mouvement encodeur)
   if (isInShiftMode) {
-    if (events.octPlus_isPressed) {
+    if (events.octPlus_isLongPressed) {
       int displayValue = 0;
       switch(mode) {
         case MODE_PRESSURE_GLIDE: {
@@ -56,7 +55,7 @@ void LedController::update(GameMode mode, const InputEvents& events,
       }
       _ledManager.displayInvertedBargraph(displayValue);
     } 
-    else if (events.octMinus_isPressed) {
+    else if (events.octMinus_isLongPressed) {
       int displayValue = 0;
       switch(mode) {
         case MODE_PRESSURE_GLIDE: {

@@ -17,24 +17,25 @@ EngineMode2::EngineMode2() {
   _gateLength = 0.5f;
   _gateIsOn = false;
   
-  _tempoLedOnTime = 0;
-  _tempoLedActive = false;
-  
   _currentPitchVoltage = PITCH_CV_CENTER_VOLTAGE;
   _targetPitchVoltage = PITCH_CV_CENTER_VOLTAGE;
   _currentAuxVoltage = 0.0f;
+  _targetAuxVoltage = 0.0f;
+  _auxSmoothingAlpha = AUX_VOLTAGE_SMOOTHING_ALPHA_DEFAULT;
   _gateOpen = false;
   _retriggerEvent = false;
   
   _octaveOffset = 0;
   _latchEnabled = false;
   // Calculate initial bargraph display value from default BPM
-  _livePotDisplayValue = map(_bpm, 5, 300, 0, 100);  // Should be ~39 for BPM=120
+  _livePotDisplayValue = map(_bpm, 5, 900, 0, 100);  // Should be ~13 for BPM=120
   _uiEffectRequested = UIEffect::NONE;
+  _shiftModeActive = false;
   
   for (int i = 0; i < MAX_ARP_NOTES; i++) {
     _arpNotes[i] = 0;
     _arpPressures[i] = 0;
+    _lastNotePressTime[i] = 0;
   }
 }
 
@@ -46,32 +47,20 @@ void EngineMode2::begin() {
 void EngineMode2::update() {
   unsigned long now = millis();
   
-  // Handle tempo LED pulse (turn off after short duration)
-  if (_tempoLedActive && (now - _tempoLedOnTime >= 10)) {  // 10ms pulse
-    // Turn off the tempo LED by restoring normal state
-    // We'll let the LED manager handle it on next update
-    _tempoLedActive = false;
-    // Note: We don't directly turn off the LED here to avoid conflicts
-  }
-  
   // If only one note or no notes, behave like monophonic mode
   if (_arpCount <= 1) {
-    // Make sure tempo LED is off when not arpeggiating
-    if (_tempoLedActive) {
-      analogWrite(PIN_LED_c, 0);  // Turn off tempo LED
-      _tempoLedActive = false;
-    }
-    
     if (_arpCount == 0) {
       _gateOpen = false;
-      _currentAuxVoltage = 0.0f;
+      _targetAuxVoltage = 0.0f;
     } else {
       // Single note: maintain gate state (don't force always on)
       // Gate was set by onNoteOn and will stay on until removed
       _targetPitchVoltage = midiNoteToVoltage(_arpNotes[0]);
-      _currentAuxVoltage = ((float)_arpPressures[0] / CV_OUTPUT_RESOLUTION) * DAC_OUTPUT_VOLTAGE_RANGE;
+      _targetAuxVoltage = ((float)_arpPressures[0] / CV_OUTPUT_RESOLUTION) * DAC_OUTPUT_VOLTAGE_RANGE;
     }
     _currentPitchVoltage = _targetPitchVoltage;
+    // Apply smoothing even for single note
+    _currentAuxVoltage = (1.0f - _auxSmoothingAlpha) * _currentAuxVoltage + _auxSmoothingAlpha * _targetAuxVoltage;
     return;
   }
   
@@ -89,29 +78,19 @@ void EngineMode2::update() {
     _retriggerEvent = true;
     _gateIsOn = true;
     _lastGateOffTime = _lastStepTime + (stepTime_ms * _gateLength);
-    
-    // Trigger tempo LED pulse on beat (direct hardware control)
-    // Pulse on every beat for clear tempo indication
-    // We use the center LED as it's most visible
-    analogWrite(PIN_LED_c, 255);  // Full brightness pulse
-    _tempoLedOnTime = now;
-    _tempoLedActive = true;
   }
   
   // Update gate state based on gate length
   updateGateState(now);
   
-  // Update average pressure from all held notes
-  updateAveragePressure();
+  // Update pressure from current arpeggiating note
+  updateCurrentNotePressure();
+  
+  // Apply smoothing to AUX voltage (like Engine1)
+  _currentAuxVoltage = (1.0f - _auxSmoothingAlpha) * _currentAuxVoltage + _auxSmoothingAlpha * _targetAuxVoltage;
   
   // Smooth pitch transition (instant for arpeggiator)
   _currentPitchVoltage = _targetPitchVoltage;
-  
-  // Turn off tempo LED after pulse duration
-  if (_tempoLedActive && (now - _tempoLedOnTime >= 10)) {
-    analogWrite(PIN_LED_c, 0);  // Turn off
-    _tempoLedActive = false;
-  }
 }
 
 void EngineMode2::processInputs(const InputEvents& events, const bool* physicalKeyState) {
@@ -126,6 +105,10 @@ void EngineMode2::processInputs(const InputEvents& events, const bool* physicalK
     _uiEffectRequested = UIEffect::VALIDATE;
   }
   
+  // Shift mode detection
+  bool shiftPlus = events.octPlus_isLongPressed;
+  bool shiftMinus = events.octMinus_isLongPressed;
+
   // Octave transpose
   if (events.octPlus_wasReleasedAsShort) {
     if (_octaveOffset < MAX_OCTAVE) _octaveOffset++;
@@ -135,7 +118,7 @@ void EngineMode2::processInputs(const InputEvents& events, const bool* physicalK
   }
   
   // Encoder controls
-  if (events.combo_OctPlus_LiveMoved) {
+  if (shiftPlus && events.live_encoderTurned) {
     // Pattern selection - improved modulo arithmetic
     int pattern = (int)_currentPattern + events.live_encoderDelta;
     int maxPatterns = (int)ArpPattern::MAX_PATTERNS;
@@ -157,31 +140,57 @@ void EngineMode2::processInputs(const InputEvents& events, const bool* physicalK
       _arpIndex = _arpCount - 1;
     }
   }
-  else if (events.combo_OctMinus_LiveMoved) {
+  else if (shiftMinus && events.live_encoderTurned) {
     // Gate length control - 5% steps for better UX
     float step = 0.05f;  // Increased from 0.01f for faster adjustment
     _gateLength = constrain(_gateLength + (events.live_encoderDelta * step), 0.1f, 0.9f);
   }
   else if (events.live_encoderTurned) {
-    // BPM control with acceleration for better UX
-    int delta = events.live_encoderDelta;
-    int stepSize = 3;  // Base step size (reduced for wider range)
+    // BPM control with velocity-based smooth acceleration
+    float stepSize = calculateEncoderStep(
+      events.live_encoderVelocity,
+      BPM_STEP_MIN,
+      BPM_STEP_MAX,
+      BPM_ACCEL_CURVE
+    );
     
-    // Acceleration: larger steps for faster turning
-    if (abs(delta) > 2) stepSize = 8;
-    if (abs(delta) > 4) stepSize = 15;
-    
-    _bpm = constrain(_bpm + (delta * stepSize), 5, 300);
-    _livePotDisplayValue = map(_bpm, 5, 300, 0, 100);
+    _bpm = constrain(
+      _bpm + (int)(events.live_encoderDelta * stepSize),
+      5, 900
+    );
+    _livePotDisplayValue = map(_bpm, 5, 900, 0, 100);
   }
 }
 
 void EngineMode2::onNoteOn(uint8_t pitch, uint16_t value) {
-  // Don't add if already present
-  for (uint8_t i = 0; i < _arpCount; i++) {
-    if (_arpNotes[i] == pitch) {
-      _arpPressures[i] = value;  // Update pressure
-      return;
+  // In latch mode: Check for double-tap to remove note
+  if (_latchEnabled) {
+    for (uint8_t i = 0; i < _arpCount; i++) {
+      if (_arpNotes[i] == pitch) {
+        unsigned long now = millis();
+        unsigned long timeSinceLastPress = now - _lastNotePressTime[i];
+        
+        // Double-tap detected - REMOVE note from pattern
+        if (timeSinceLastPress < ARP_DOUBLE_TAP_WINDOW_MS) {
+          removeNote(pitch);
+          return;
+        }
+        
+        // Normal re-press - UPDATE pressure
+        _arpPressures[i] = value;
+        _lastNotePressTime[i] = now;
+        return;
+      }
+    }
+  }
+  // Non-latch mode or note not in pattern: standard behavior
+  else {
+    // Don't add if already present (non-latch mode)
+    for (uint8_t i = 0; i < _arpCount; i++) {
+      if (_arpNotes[i] == pitch) {
+        _arpPressures[i] = value;  // Update pressure
+        return;
+      }
     }
   }
   
@@ -193,6 +202,7 @@ void EngineMode2::onNoteOn(uint8_t pitch, uint16_t value) {
     
     _arpNotes[_arpCount] = pitch;
     _arpPressures[_arpCount] = value;
+    _lastNotePressTime[_arpCount] = millis();  // Initialize timestamp
     _arpCount++;
     
     // Sort notes for ordered patterns
@@ -228,6 +238,7 @@ void EngineMode2::onNoteOn(uint8_t pitch, uint16_t value) {
     // Add new note at the end
     _arpNotes[MAX_ARP_NOTES - 1] = pitch;
     _arpPressures[MAX_ARP_NOTES - 1] = value;
+    _lastNotePressTime[MAX_ARP_NOTES - 1] = millis();
     
     // Maintain sort order
     sortArpNotes();
@@ -571,20 +582,22 @@ void EngineMode2::updatePitchFromCurrentNote() {
   }
 }
 
-void EngineMode2::updateAveragePressure() {
+void EngineMode2::updateCurrentNotePressure() {
   if (_arpCount == 0) {
-    _currentAuxVoltage = 0.0f;
+    _targetAuxVoltage = 0.0f;
     return;
   }
   
-  // Calculate average pressure from all held notes
-  uint32_t totalPressure = 0;
-  for (uint8_t i = 0; i < _arpCount; i++) {
-    totalPressure += _arpPressures[i];
+  // Use pressure from the currently playing note (not average of all notes)
+  if (_arpIndex >= 0 && _arpIndex < _arpCount) {
+    _targetAuxVoltage = ((float)_arpPressures[_arpIndex] / CV_OUTPUT_RESOLUTION) * DAC_OUTPUT_VOLTAGE_RANGE;
+  } else {
+    _targetAuxVoltage = 0.0f;
   }
-  
-  uint16_t avgPressure = totalPressure / _arpCount;
-  _currentAuxVoltage = ((float)avgPressure / CV_OUTPUT_RESOLUTION) * DAC_OUTPUT_VOLTAGE_RANGE;
+}
+
+void EngineMode2::setSharedAftertouchParams(float smoothingAlpha) {
+  _auxSmoothingAlpha = smoothingAlpha;
 }
 
 void EngineMode2::updateGateState(unsigned long now) {
@@ -616,6 +629,11 @@ void EngineMode2::sortArpNotes() {
         uint16_t tempPressure = _arpPressures[j];
         _arpPressures[j] = _arpPressures[j + 1];
         _arpPressures[j + 1] = tempPressure;
+        
+        // Swap timestamps
+        unsigned long tempTime = _lastNotePressTime[j];
+        _lastNotePressTime[j] = _lastNotePressTime[j + 1];
+        _lastNotePressTime[j + 1] = tempTime;
       }
     }
   }
@@ -628,6 +646,7 @@ void EngineMode2::setLatch(bool enabled, const bool* physicalKeyState) {
     // Remove notes that are no longer physically pressed
     uint8_t newNotes[MAX_ARP_NOTES];
     uint16_t newPressures[MAX_ARP_NOTES];
+    unsigned long newTimes[MAX_ARP_NOTES];
     uint8_t newCount = 0;
     
     for (uint8_t i = 0; i < _arpCount; i++) {
@@ -635,6 +654,7 @@ void EngineMode2::setLatch(bool enabled, const bool* physicalKeyState) {
       if (keyIndex >= 0 && keyIndex < NUM_KEYS && physicalKeyState[keyIndex]) {
         newNotes[newCount] = _arpNotes[i];
         newPressures[newCount] = _arpPressures[i];
+        newTimes[newCount] = _lastNotePressTime[i];
         newCount++;
       }
     }
@@ -643,6 +663,7 @@ void EngineMode2::setLatch(bool enabled, const bool* physicalKeyState) {
     for (uint8_t i = 0; i < newCount; i++) {
       _arpNotes[i] = newNotes[i];
       _arpPressures[i] = newPressures[i];
+      _lastNotePressTime[i] = newTimes[i];
     }
     _arpCount = newCount;
     
@@ -685,6 +706,7 @@ void EngineMode2::removeNote(uint8_t pitch) {
     for (uint8_t i = removeIndex; i < _arpCount - 1; i++) {
       _arpNotes[i] = _arpNotes[i + 1];
       _arpPressures[i] = _arpPressures[i + 1];
+      _lastNotePressTime[i] = _lastNotePressTime[i + 1];
     }
     _arpCount--;
     

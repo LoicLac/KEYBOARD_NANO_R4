@@ -50,12 +50,16 @@ public:
   int   getCurrentPattern() const;
   int   getMaxPatterns() const;
   float getGateLength() const;
+  
+  // Setter for shared aftertouch parameters from Engine1
+  void setSharedAftertouchParams(float smoothingAlpha);
 
 private:
   // Arpeggiator state
   static const uint8_t MAX_ARP_NOTES = 8;
   uint8_t _arpNotes[MAX_ARP_NOTES];        // Note pitches
   uint16_t _arpPressures[MAX_ARP_NOTES];   // Pressure per note
+  unsigned long _lastNotePressTime[MAX_ARP_NOTES];  // For double-tap detection
   uint8_t _arpCount;                       // Number of active notes
   int8_t _arpIndex;                        // Current position in pattern
   
@@ -73,14 +77,12 @@ private:
   float _gateLength;                       // 0.1 to 0.9
   bool _gateIsOn;
   
-  // Tempo LED pulse
-  unsigned long _tempoLedOnTime;           // When the tempo LED was turned on
-  bool _tempoLedActive;                    // Is tempo LED currently on
-  
   // Output values
   float _currentPitchVoltage;
   float _targetPitchVoltage;
-  float _currentAuxVoltage;                // Average pressure
+  float _currentAuxVoltage;
+  float _targetAuxVoltage;                 // Target for smoothing
+  float _auxSmoothingAlpha;                // Shared from Engine1
   bool _gateOpen;
   bool _retriggerEvent;
   
@@ -89,6 +91,7 @@ private:
   bool _latchEnabled;
   int _livePotDisplayValue;
   UIEffect _uiEffectRequested;
+  bool _shiftModeActive;
   
   // Helper methods
   void resetPattern();
@@ -106,7 +109,7 @@ private:
   void stepPatternCascade();
   void stepPatternProbability();
   void updatePitchFromCurrentNote();
-  void updateAveragePressure();
+  void updateCurrentNotePressure();
   void updateGateState(unsigned long now);
   void sortArpNotes();
   void setLatch(bool enabled, const bool* physicalKeyState);

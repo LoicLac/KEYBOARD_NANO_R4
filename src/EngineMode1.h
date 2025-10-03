@@ -54,6 +54,7 @@ private:
   UIEffect _uiEffectRequested;
   int _livePotDisplayValue;
   int _aftertouchDeadzoneOffset;
+  bool _shiftModeActive;
 
   Note _noteStack[NOTE_STACK_SIZE];
   int _noteStackPointer;

@@ -2,6 +2,7 @@
 #define HARDWARE_CONFIG_H
 
 #include <stdint.h>
+#include <math.h>
 
 // =================================================================
 // 1. SYSTEME & DEBUG
@@ -65,6 +66,32 @@ const float POT_SENS_SMOOTHING_ALPHA = 0.05f;
 const int ENCODER_STEPS_PER_DETENT = 4;  // Typical encoder has 4 state changes per click
 const unsigned long ENCODER_DEBOUNCE_TIME_MS = 2;  // Debounce time for encoder readings
 
+// Arpeggiator Double-Tap Note Removal (Mode 2 Latch only)
+// Adjust this value (150-300ms recommended) to change double-tap sensitivity
+// Lower = faster tap required, Higher = more forgiving timing
+const unsigned long ARP_DOUBLE_TAP_WINDOW_MS = 250;  // Default: 250ms
+
+// =================================================================
+// ENCODER ACCELERATION CURVES (Velocity-Based Control)
+// =================================================================
+// These values control how encoder speed affects step size
+// Tune these for optimal precision vs speed balance
+
+// Velocity tracking
+const unsigned long ENCODER_VELOCITY_WINDOW_MS = 80;    // Time window to measure speed
+const int ENCODER_VELOCITY_MAX = 20;                     // Maximum tracked velocity
+const float ENCODER_VELOCITY_SMOOTHING = 0.3f;          // Velocity smoothing (0.0-1.0, higher = less smooth)
+
+// Glide Time Control (0-1000ms range)
+const float GLIDE_STEP_MIN = 0.5f;      // Ultra-precise at slow speed (0.5ms per tick)
+const float GLIDE_STEP_MAX = 50.0f;     // Fast sweep at high speed (50ms per tick)
+const float GLIDE_ACCEL_CURVE = 2.2f;   // Acceleration curve (1.0=linear, 2.0=quadratic, higher=more aggressive)
+
+// BPM Control (5-900 range)
+const float BPM_STEP_MIN = 0.5f;        // Ultra-precise at slow speed (0.5 BPM per tick)
+const float BPM_STEP_MAX = 35.0f;       // Fast at high speed (35 BPM per tick)
+const float BPM_ACCEL_CURVE = 1.8f;     // Slightly gentler curve than glide
+
 #define DAC_I2C_ADDR 0x5F
 #define CV_OUTPUT_RESOLUTION 4095
 
@@ -113,6 +140,24 @@ const int TRIGGER_PULSE_DURATION_MS = 5;
 // -> Augmenter (vers 1.0): La transition sera quasi instantanée et abrupte.
 
 const int AFTERTOUCH_DEADZONE_MAX_OFFSET = 250;
+
+// =================================================================
+// UTILITY FUNCTIONS
+// =================================================================
+
+// Calculate encoder step size based on velocity (smooth acceleration curve)
+inline float calculateEncoderStep(int velocity, float minStep, float maxStep, float curve) {
+  // Normalize velocity to 0.0-1.0 and clamp within bounds
+  float normalizedVelocity = (float)velocity / (float)ENCODER_VELOCITY_MAX;
+  if (normalizedVelocity < 0.0f) normalizedVelocity = 0.0f;
+  if (normalizedVelocity > 1.0f) normalizedVelocity = 1.0f;
+  
+  // Apply acceleration curve (exponential)
+  float curvedVelocity = powf(normalizedVelocity, curve);
+  
+  // Map to step range
+  return minStep + curvedVelocity * (maxStep - minStep);
+}
 // Technique: Valeur ADC maximale qui peut être ajoutée au seuil de départ de l'aftertouch.
 // Musical: La "course à vide" de l'aftertouch après le déclenchement de la note.
 // Plage: 0 (pas de zone morte) à ~200 (zone morte très prononcée).

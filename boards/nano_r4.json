@@ -4,7 +4,7 @@
       "ldscript": "fsp.ld"
     },
     "extra_flags": [
-      "-DARDUINO_UNOWIFIR4",
+      "-DARDUINO_MINIMA",
       "-DARDUINO_NANOR4",
       "-DARDUINO_ARCH_RENESAS_UNO",
       "-DCFG_TUSB_MCU=OPT_MCU_RAXXX"
@@ -23,7 +23,7 @@
       ]
     ],
     "mcu": "ra4m1",
-    "variant": "UNOWIFIR4"
+    "variant": "NANOR4"
   },
   "debug": {
     "jlink_device": "R7FA4M1AB",
@@ -34,7 +34,7 @@
     "fsp",
     "cmsis"
   ],
-  "name": "Arduino Nano R4 (Fixed)",
+  "name": "Arduino Nano R4",
   "upload": {
     "maximum_ram_size": 32768,
     "maximum_size": 262144,

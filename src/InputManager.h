@@ -18,12 +18,15 @@ struct InputEvents {
   // États des boutons "shift"
   bool octPlus_isPressed;
   bool octMinus_isPressed;
+  bool octPlus_isLongPressed;
+  bool octMinus_isLongPressed;
 
   // --- Mouvements de Contrôleurs ---
   bool sens_potMoved;
   bool live_encoderTurned;     // Replaces live_potMoved
   int potSensValue; 
   int live_encoderDelta;       // Replaces potLiveValue - contains +1, -1, or 0
+  int live_encoderVelocity;    // Speed of encoder turning (0-20, for acceleration)
 
   // --- Événements de Combinaisons ---
   bool combo_OctPlus_LiveMoved;
@@ -51,6 +54,12 @@ private:
   bool _modeLongPressTriggered;
   bool _octPlus_comboHappened;
   bool _octMinus_comboHappened;
+  bool _octPlus_longPressTriggered;
+  bool _octMinus_longPressTriggered;
+  
+  // Encoder velocity tracking
+  unsigned long _encoderLastTurnTime;
+  float _encoderVelocity;  // Smoothed velocity value
 };
 
 #endif // INPUT_MANAGER_H

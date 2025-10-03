@@ -21,6 +21,7 @@ EngineMode1::EngineMode1() {
   _uiEffectRequested = UIEffect::NONE;
   _livePotDisplayValue = 0;
   _aftertouchDeadzoneOffset = 0;
+  _shiftModeActive = false;
 
   for (int i = 0; i < NOTE_STACK_SIZE; ++i) {
     _noteStack[i] = {0, 0};
@@ -58,6 +59,10 @@ void EngineMode1::update() {
 }
 
 void EngineMode1::processInputs(const InputEvents& events, const bool* physicalKeyState) {
+  // Shift mode detection
+  bool shiftPlus = events.octPlus_isLongPressed;
+  bool shiftMinus = events.octMinus_isLongPressed;
+
   // --- Button Events ---
   if (events.hold_wasPressedShort) {
     setLatch(!_latchEnabled, physicalKeyState);
@@ -73,13 +78,13 @@ void EngineMode1::processInputs(const InputEvents& events, const bool* physicalK
   }
 
   // --- Encoder Control (Incremental) ---
-  if (events.combo_OctPlus_LiveMoved) {
+  if (shiftPlus && events.live_encoderTurned) {
     // Direct smoothing control - no catching needed!
     float step = (AUX_SMOOTHING_MAX_ALPHA - AUX_SMOOTHING_MIN_ALPHA) / 100.0f;
     float newAlpha = _auxSmoothingAlpha + (events.live_encoderDelta * step);
     setAuxSmoothingAlpha(constrain(newAlpha, AUX_SMOOTHING_MIN_ALPHA, AUX_SMOOTHING_MAX_ALPHA));
   } 
-  else if (events.combo_OctMinus_LiveMoved) {
+  else if (shiftMinus && events.live_encoderTurned) {
     // Direct deadzone control - no catching needed!
     int step = AFTERTOUCH_DEADZONE_MAX_OFFSET / 50; // 50 steps from 0 to max
     _aftertouchDeadzoneOffset = constrain(
@@ -88,10 +93,16 @@ void EngineMode1::processInputs(const InputEvents& events, const bool* physicalK
     );
   }
   else if (events.live_encoderTurned) {
-    // Direct glide control - no catching needed!
-    float step = GLIDE_MAX_TIME_MS / 500.0f; // 500 steps from 0 to max
+    // Glide control with velocity-based smooth acceleration
+    float stepSize = calculateEncoderStep(
+      events.live_encoderVelocity,
+      GLIDE_STEP_MIN,
+      GLIDE_STEP_MAX,
+      GLIDE_ACCEL_CURVE
+    );
+    
     _glideTime_ms = constrain(
-      _glideTime_ms + (events.live_encoderDelta * step),
+      _glideTime_ms + (events.live_encoderDelta * stepSize),
       0.0f, GLIDE_MAX_TIME_MS
     );
     _livePotDisplayValue = (_glideTime_ms / GLIDE_MAX_TIME_MS) * 100;

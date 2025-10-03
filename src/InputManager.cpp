@@ -14,6 +14,11 @@ InputManager::InputManager() :
   _modeLongPressTriggered = false;
   _octPlus_comboHappened = false;
   _octMinus_comboHappened = false;
+  _octPlus_longPressTriggered = false;
+  _octMinus_longPressTriggered = false;
+  
+  _encoderLastTurnTime = 0;
+  _encoderVelocity = 0.0f;
 }
 
 void InputManager::begin() {
@@ -54,6 +59,8 @@ void InputManager::update() {
   // --- Etape 3: Exposer l'état des "Shift" ---
   _events.octPlus_isPressed = _btnOctPlus.isPressed();
   _events.octMinus_isPressed = _btnOctMinus.isPressed();
+  _events.octPlus_isLongPressed = false;
+  _events.octMinus_isLongPressed = false;
 
   // --- Etape 4: Lire les contrôleurs (potentiomètre + encodeur) ---
   
@@ -68,14 +75,43 @@ void InputManager::update() {
     _events.potSensValue = _lastPotSensSent;
   }
 
-  // Replace pot_live with encoder reading
+  // Replace pot_live with encoder reading and velocity tracking
   int encoderDelta = _liveEncoder.read();
+  unsigned long now = millis();
+  
   if (encoderDelta != 0) {
+    unsigned long timeSinceLastTurn = now - _encoderLastTurnTime;
+    
+    // Calculate instantaneous velocity
+    float instantVelocity = 0.0f;
+    if (timeSinceLastTurn > 0 && timeSinceLastTurn < ENCODER_VELOCITY_WINDOW_MS * 3) {
+      // Convert to ticks per ENCODER_VELOCITY_WINDOW_MS
+      instantVelocity = (abs(encoderDelta) * ENCODER_VELOCITY_WINDOW_MS) / (float)timeSinceLastTurn;
+      instantVelocity = constrain(instantVelocity, 0.0f, (float)ENCODER_VELOCITY_MAX);
+    } else {
+      // Very slow or first turn - use base velocity
+      instantVelocity = abs(encoderDelta);
+    }
+    
+    // Apply smoothing to velocity (reduces jitter)
+    _encoderVelocity = ENCODER_VELOCITY_SMOOTHING * instantVelocity + 
+                       (1.0f - ENCODER_VELOCITY_SMOOTHING) * _encoderVelocity;
+    
+    _encoderLastTurnTime = now;
     _events.live_encoderTurned = true;
     _events.live_encoderDelta = encoderDelta;
+    _events.live_encoderVelocity = (int)_encoderVelocity;
   } else {
+    // Decay velocity when encoder stops
+    unsigned long timeSinceLastTurn = now - _encoderLastTurnTime;
+    if (timeSinceLastTurn > ENCODER_VELOCITY_WINDOW_MS * 2) {
+      _encoderVelocity *= 0.9f;  // Exponential decay
+      if (_encoderVelocity < 0.1f) _encoderVelocity = 0.0f;
+    }
+    
     _events.live_encoderTurned = false;
     _events.live_encoderDelta = 0;
+    _events.live_encoderVelocity = (int)_encoderVelocity;
   }
   
   // --- Etape 5: Détecter les événements de boutons et combinaisons ---
@@ -103,29 +139,48 @@ void InputManager::update() {
     _modeLongPressTriggered = false;
   }
 
-  // --- LOGIQUE "ACTION ON RELEASE" CORRIGÉE POUR OCTAVE ---
-  if (_events.octPlus_isPressed) {
-    if (_events.live_encoderTurned) {  // CHANGED: was live_potMoved
+  // --- Oct+ and Oct- Button Logic ---
+  // Oct+ button logic with 500ms long press requirement
+  if (_btnOctPlus.isPressed()) {
+    if (_btnOctPlus.pressedFor(500) && !_octPlus_longPressTriggered) {
+      _octPlus_longPressTriggered = true;
+    }
+    // Keep flag true while button is held past 500ms
+    if (_octPlus_longPressTriggered) {
+      _events.octPlus_isLongPressed = true;
+    }
+    if (_events.octPlus_isLongPressed && _events.live_encoderTurned) {
       _events.combo_OctPlus_LiveMoved = true;
-      _octPlus_comboHappened = true; // On mémorise qu'un combo a eu lieu
+      _octPlus_comboHappened = true;
     }
   } else if (_btnOctPlus.wasReleased()) {
-    if (!_octPlus_comboHappened) {
-      // S'il n'y a pas eu de combo, c'était un appui court
+    if (!_octPlus_comboHappened && !_octPlus_longPressTriggered) {
+      // Short press without combo and without long press
       _events.octPlus_wasReleasedAsShort = true;
     }
-    _octPlus_comboHappened = false; // On réinitialise l'état au relâchement
+    _octPlus_comboHappened = false;
+    _octPlus_longPressTriggered = false;
   }
 
-  if (_events.octMinus_isPressed) {
-    if (_events.live_encoderTurned) {  // CHANGED: was live_potMoved
+  // Oct- button logic with 500ms long press requirement
+  if (_btnOctMinus.isPressed()) {
+    if (_btnOctMinus.pressedFor(500) && !_octMinus_longPressTriggered) {
+      _octMinus_longPressTriggered = true;
+    }
+    // Keep flag true while button is held past 500ms
+    if (_octMinus_longPressTriggered) {
+      _events.octMinus_isLongPressed = true;
+    }
+    if (_events.octMinus_isLongPressed && _events.live_encoderTurned) {
       _events.combo_OctMinus_LiveMoved = true;
       _octMinus_comboHappened = true;
     }
   } else if (_btnOctMinus.wasReleased()) {
-    if (!_octMinus_comboHappened) {
+    if (!_octMinus_comboHappened && !_octMinus_longPressTriggered) {
+      // Short press without combo and without long press
       _events.octMinus_wasReleasedAsShort = true;
     }
     _octMinus_comboHappened = false;
+    _octMinus_longPressTriggered = false;
   }
 }

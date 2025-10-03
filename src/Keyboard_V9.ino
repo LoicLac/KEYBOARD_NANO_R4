@@ -208,6 +208,9 @@ void loop() {
     }
     case MODE_INTERVAL: {
       engine2.processInputs(events, physicalKeyState);
+      // Share aftertouch parameters from Engine1
+      keyboard.setAftertouchDeadzone(engine1.getAftertouchDeadzoneOffset());
+      engine2.setSharedAftertouchParams(engine1.getAuxSmoothingAlpha());
       for (int i = 0; i < NUM_KEYS; i++) {
         uint8_t pitch = 36 + i;
         if (keyboard.noteOn(i))  engine2.onNoteOn(pitch, keyboard.getPressure(i));
