@@ -2,3 +2,5 @@
 .vscode
 .DS_Store
 
+.env
+.smartdoc_KEYBOARD_NANO_R4
