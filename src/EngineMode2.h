@@ -20,6 +20,9 @@ enum class ArpPattern {
   PEDAL_UP,     // Alternate with lowest note
   CASCADE,      // Each note twice
   PROBABILITY,  // Weighted random (lower notes favored)
+  OCTAVE_WAVE,
+  OCTAVE_ALPHA,
+  OCTAVE_BOUNCE,
   MAX_PATTERNS  // Always last - used for cycling
 };
 
@@ -49,7 +52,8 @@ public:
   // Additional getters for LED display
   int   getCurrentPattern() const;
   int   getMaxPatterns() const;
-  float getGateLength() const;
+  uint8_t getTemplate() const;
+  float getShuffleDepth() const;
   
   // Setter for shared aftertouch parameters from Engine1
   void setSharedAftertouchParams(float smoothingAlpha);
@@ -70,12 +74,25 @@ private:
   uint8_t _cascadeCount;                   // For CASCADE pattern
   uint8_t _pedalIndex;                     // For PEDAL_UP pattern
   
+  // State for new octave patterns
+  int8_t _waveOctave;                      // For OCTAVE_WAVE, from -2 to +2
+  bool _waveDirection;                     // For OCTAVE_WAVE, true=up
+  int8_t _alphaOctave;                     // For OCTAVE_ALPHA, from -2 to +2
+  bool _bounceState;                       // For OCTAVE_BOUNCE, false=low, true=high
+  
   // Timing
   unsigned long _lastStepTime;
   unsigned long _lastGateOffTime;
   uint16_t _bpm;
-  float _gateLength;                       // 0.1 to 0.9
   bool _gateIsOn;
+  
+  // Shuffle/Groove parameters (replaces gate length)
+  uint8_t _shuffleTemplate;     // 0-4 (which groove template)
+  float _shuffleDepth;          // 0.0-0.5 (how much shuffle applied)
+  uint8_t _shuffleStepCounter;  // Tracks position in 8-step cycle
+  
+  // Pattern selection encoder accumulator
+  int _patternEncoderAccum;     // Accumulates encoder clicks for pattern selection
   
   // Output values
   float _currentPitchVoltage;
@@ -108,6 +125,9 @@ private:
   void stepPatternPedalUp();
   void stepPatternCascade();
   void stepPatternProbability();
+  void stepPatternOctaveWave();
+  void stepPatternOctaveAlpha();
+  void stepPatternOctaveBounce();
   void updatePitchFromCurrentNote();
   void updateCurrentNotePressure();
   void updateGateState(unsigned long now);

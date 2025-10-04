@@ -26,11 +26,12 @@ public:
   void playCrossfade(uint16_t period_ms, uint8_t reps);
   void playInwardWipe(uint16_t step_ms, uint8_t reps);
   void playCountdown(uint16_t duration_ms);
+  void playPatternDisplay(int patternIndex);
 
 private:
   enum Mode { MODE_GAME, MODE_CALIBRATION };
   enum BackgroundType { BG_NONE, BG_OCTAVE_BREATHE, BG_STATIC_PATTERN };
-  enum FxType { FX_NONE, FX_VALIDATION, FX_CHASE, FX_BARGRAPH, FX_CROSSFADE, FX_INWARD_WIPE, FX_INVERTED_BARGRAPH };
+  enum FxType { FX_NONE, FX_VALIDATION, FX_CHASE, FX_BARGRAPH, FX_CROSSFADE, FX_INWARD_WIPE, FX_INVERTED_BARGRAPH, FX_PATTERN_DISPLAY };
 
   Mode currentMode;
   BackgroundType currentBackground;
@@ -48,9 +49,11 @@ private:
   uint16_t req_fx_param_period;
   uint8_t  req_fx_param_reps;
   int      req_fx_param_bargraph_value;
+  int      req_fx_param_pattern_index;
   uint16_t fx_param_period;
   uint8_t  fx_param_reps;
   int      fx_param_bargraph_value;
+  int      fx_param_pattern_index;
 
   // Timers
   unsigned long bg_startTime;

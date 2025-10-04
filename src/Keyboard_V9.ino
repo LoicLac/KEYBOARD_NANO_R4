@@ -236,6 +236,7 @@ void loop() {
   }
 
   // L'appel au LedController est maintenant à la fin pour lui donner le contexte final
- ledController.update(currentMode, events, engine1, engine2, engine3, keyboard);
+  ledController.update(currentMode, events, engine1, engine2, engine3, keyboard);
+
   renderAudioOutputs(pitchV, auxV, gateState, retrigger);
 }

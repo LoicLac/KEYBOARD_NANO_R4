@@ -32,28 +32,32 @@ void LedController::update(GameMode mode, const InputEvents& events,
       switch(mode) {
         case MODE_PRESSURE_GLIDE: {
           // Show current smoothing value as inverted bargraph
+          // Non-linear mapping: expand low values (0.001-0.225) to 0-50%
+          // and compress high values (0.225-0.9) to 50-100%
           float currentAlpha = engine1.getAuxSmoothingAlpha();
-          displayValue = map(currentAlpha * 1000, 
-                            AUX_SMOOTHING_MIN_ALPHA * 1000, 
-                            AUX_SMOOTHING_MAX_ALPHA * 1000, 
-                            0, 100);
+          float normalizedAlpha = (currentAlpha - AUX_SMOOTHING_MIN_ALPHA) / 
+                                  (AUX_SMOOTHING_MAX_ALPHA - AUX_SMOOTHING_MIN_ALPHA);
+          
+          // Apply exponential curve to expand low range
+          // Use power of 0.4 to heavily favor the low end
+          float remappedValue = powf(normalizedAlpha, 0.4f);
+          displayValue = (int)(remappedValue * 100.0f);
+          displayValue = constrain(displayValue, 0, 100);
+          
+          _ledManager.displayInvertedBargraph(displayValue);
           break;
         }
         case MODE_INTERVAL: {
-          // Show current arpeggiator pattern as inverted bargraph (scalable)
-          int currentPattern = engine2.getCurrentPattern();
-          int maxPatterns = engine2.getMaxPatterns();
-          // Map pattern index to 0-100% for display
-          displayValue = (maxPatterns > 1) ? 
-                        map(currentPattern, 0, maxPatterns - 1, 0, 100) : 0;
+          // Show current pattern continuously during long press
+          _ledManager.playPatternDisplay(engine2.getCurrentPattern());
           break;
         }
         case MODE_MIDI:
           // Mode 3 doesn't use Oct+ combo yet
           displayValue = 0;
+          _ledManager.displayInvertedBargraph(displayValue);
           break;
       }
-      _ledManager.displayInvertedBargraph(displayValue);
     } 
     else if (events.octMinus_isLongPressed) {
       int displayValue = 0;
@@ -66,9 +70,20 @@ void LedController::update(GameMode mode, const InputEvents& events,
           break;
         }
         case MODE_INTERVAL: {
-          // Show current gate length as inverted bargraph (10%-90%)
-          float gateLength = engine2.getGateLength();
-          displayValue = map(gateLength * 100, 10, 90, 0, 100);
+          // Show shuffle: template + depth as continuous inverted bargraph
+          // Each template occupies 20% of display (5 templates × 20% = 100%)
+          // Within each template, depth goes from 0-50% → mapped to 0-10% of display
+          uint8_t templateIndex = engine2.getTemplate();
+          float shuffleDepth = engine2.getShuffleDepth();
+          
+          // Calculate display value:
+          // Template 0: 0-10%, Template 1: 20-30%, etc.
+          float baseValue = templateIndex * 20.0f;
+          float depthContribution = (shuffleDepth / SHUFFLE_DEPTH_MAX) * 10.0f;
+          displayValue = (int)(baseValue + depthContribution);
+          displayValue = constrain(displayValue, 0, 100);
+          
+          _ledManager.displayInvertedBargraph(displayValue);
           break;
         }
         case MODE_MIDI:
@@ -110,6 +125,8 @@ void LedController::update(GameMode mode, const InputEvents& events,
   }
   if (requestedEffect == UIEffect::VALIDATE) {
     _ledManager.playValidation(100, 2);
+  } else if (requestedEffect == UIEffect::ARP_PATTERN_CHANGE) {
+    _ledManager.playPatternDisplay(engine2.getCurrentPattern());
   }
 
   // --- ÉTAPE 3: GESTION DE L'AFFICHAGE DE FOND ---

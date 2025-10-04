@@ -11,11 +11,21 @@ EngineMode2::EngineMode2() {
   _cascadeCount = 0;
   _pedalIndex = 0;
   
+  _waveOctave = 0;
+  _waveDirection = true;
+  _alphaOctave = -2;
+  _bounceState = false;
+
   _lastStepTime = 0;
   _lastGateOffTime = 0;
   _bpm = 120;
-  _gateLength = 0.5f;
   _gateIsOn = false;
+  
+  _shuffleTemplate = 0;        // Start with template 1
+  _shuffleDepth = 0.0f;        // No shuffle by default
+  _shuffleStepCounter = 0;     // Start at step 0
+  
+  _patternEncoderAccum = 0;    // Initialize pattern encoder accumulator
   
   _currentPitchVoltage = PITCH_CV_CENTER_VOLTAGE;
   _targetPitchVoltage = PITCH_CV_CENTER_VOLTAGE;
@@ -67,17 +77,50 @@ void EngineMode2::update() {
   // Arpeggiator mode for multiple notes
   float stepTime_ms = 60000.0f / _bpm;
   
-  // Check if it's time for next step (maintain timing grid)
-  if (now - _lastStepTime >= stepTime_ms) {
-    _lastStepTime += stepTime_ms;  // Maintain precise timing grid
+  // Calculate shuffle offset for NEXT step (before checking timing)
+  float shuffleOffset = 0.0f;
+  if (_shuffleDepth > 0.0f && 
+      _shuffleTemplate < SHUFFLE_TEMPLATE_COUNT &&
+      _shuffleStepCounter < SHUFFLE_STEPS_PER_CYCLE) {
+    int8_t templateOffset = SHUFFLE_TEMPLATES[_shuffleTemplate][_shuffleStepCounter];
+    shuffleOffset = (templateOffset * _shuffleDepth * stepTime_ms) / 100.0f;
+    
+    #if DEBUG_LEVEL >= 2
+    Serial.print("Step ");
+    Serial.print(_shuffleStepCounter);
+    Serial.print(": offset=");
+    Serial.print(templateOffset);
+    Serial.print("% shuffle=");
+    Serial.print(shuffleOffset);
+    Serial.println("ms");
+    #endif
+  }
+  
+  // Check if it's time for next step (with shuffle applied to wait time)
+  float effectiveWaitTime = stepTime_ms + shuffleOffset;
+  
+  // Safety: clamp effective wait time to reasonable bounds
+  if (effectiveWaitTime < 50.0f) effectiveWaitTime = 50.0f;  // Minimum 50ms
+  if (effectiveWaitTime > stepTime_ms * 2.0f) effectiveWaitTime = stepTime_ms * 2.0f;
+  
+  if (now - _lastStepTime >= (unsigned long)effectiveWaitTime) {
+    // Advance timing to maintain grid (use base stepTime, not shuffled)
+    _lastStepTime += (unsigned long)stepTime_ms;
+    
     // Handle overflow or large drift case
     if (_lastStepTime < now - stepTime_ms * 2) {
       _lastStepTime = now;  // Resync if too far behind
     }
+    
     stepToNext();
     _retriggerEvent = true;
     _gateIsOn = true;
-    _lastGateOffTime = _lastStepTime + (stepTime_ms * _gateLength);
+    
+    // Fixed gate length at 50% for shuffle mode
+    _lastGateOffTime = _lastStepTime + (stepTime_ms * 0.5f);
+    
+    // Increment shuffle step counter (wraps at 8)
+    _shuffleStepCounter = (_shuffleStepCounter + 1) % SHUFFLE_STEPS_PER_CYCLE;
   }
   
   // Update gate state based on gate length
@@ -119,20 +162,32 @@ void EngineMode2::processInputs(const InputEvents& events, const bool* physicalK
   
   // Encoder controls
   if (shiftPlus && events.live_encoderTurned) {
-    // Pattern selection - improved modulo arithmetic
-    int pattern = (int)_currentPattern + events.live_encoderDelta;
-    int maxPatterns = (int)ArpPattern::MAX_PATTERNS;
-    // Proper modulo that handles negative numbers
-    pattern = ((pattern % maxPatterns) + maxPatterns) % maxPatterns;
+    // Pattern selection with reduced sensitivity
+    _patternEncoderAccum += events.live_encoderDelta;
     
-    // Keep current position when changing patterns for better UX
-    // Only reset direction for UP_DOWN pattern
-    ArpPattern oldPattern = _currentPattern;
-    _currentPattern = (ArpPattern)pattern;
+    // 5 clicks = 1 pattern change (one turn ≈ 24 clicks = ~5 patterns)
+    const int CLICKS_PER_PATTERN = 5;
     
-    // Reset direction for UP_DOWN, but keep position
-    if (_currentPattern == ArpPattern::UP_DOWN) {
-      _patternDirection = true;  // Start going up
+    if (abs(_patternEncoderAccum) >= CLICKS_PER_PATTERN) {
+      int patternChange = _patternEncoderAccum / CLICKS_PER_PATTERN;
+      _patternEncoderAccum %= CLICKS_PER_PATTERN;  // Keep remainder
+      
+      int pattern = (int)_currentPattern + patternChange;
+      int maxPatterns = (int)ArpPattern::MAX_PATTERNS;
+      
+      // Clamp instead of wrap (no rollover)
+      pattern = constrain(pattern, 0, maxPatterns - 1);
+      
+      // Keep current position when changing patterns for better UX
+      ArpPattern oldPattern = _currentPattern;
+      _currentPattern = (ArpPattern)pattern;
+      
+      // Reset direction for UP_DOWN, but keep position
+      if (oldPattern != ArpPattern::UP_DOWN && _currentPattern == ArpPattern::UP_DOWN) {
+        _patternDirection = true;  // Start going up
+      }
+      
+      _uiEffectRequested = UIEffect::ARP_PATTERN_CHANGE;
     }
     
     // Ensure index is still valid for new pattern
@@ -141,9 +196,49 @@ void EngineMode2::processInputs(const InputEvents& events, const bool* physicalK
     }
   }
   else if (shiftMinus && events.live_encoderTurned) {
-    // Gate length control - 5% steps for better UX
-    float step = 0.05f;  // Increased from 0.01f for faster adjustment
-    _gateLength = constrain(_gateLength + (events.live_encoderDelta * step), 0.1f, 0.9f);
+    // Shuffle control: template selection + depth
+    float newDepth = _shuffleDepth + (events.live_encoderDelta * SHUFFLE_DEPTH_STEP);
+    
+    #if DEBUG_LEVEL >= 1
+    Serial.print("Shuffle: template=");
+    Serial.print(_shuffleTemplate);
+    Serial.print(" depth=");
+    Serial.print(_shuffleDepth);
+    Serial.print(" newDepth=");
+    Serial.println(newDepth);
+    #endif
+    
+    // Handle wrapping between templates
+    if (newDepth > SHUFFLE_DEPTH_MAX) {
+      // Advance to next template
+      if (_shuffleTemplate < SHUFFLE_TEMPLATE_COUNT - 1) {
+        _shuffleTemplate++;
+        _shuffleDepth = 0.0f;
+        #if DEBUG_LEVEL >= 1
+        Serial.print("-> Next template: ");
+        Serial.println(_shuffleTemplate);
+        #endif
+      } else {
+        // Already at last template, clamp depth
+        _shuffleDepth = SHUFFLE_DEPTH_MAX;
+      }
+    } else if (newDepth < 0.0f) {
+      // Go back to previous template
+      if (_shuffleTemplate > 0) {
+        _shuffleTemplate--;
+        _shuffleDepth = SHUFFLE_DEPTH_MAX;
+        #if DEBUG_LEVEL >= 1
+        Serial.print("<- Prev template: ");
+        Serial.println(_shuffleTemplate);
+        #endif
+      } else {
+        // Already at first template, clamp depth
+        _shuffleDepth = 0.0f;
+      }
+    } else {
+      // Normal depth adjustment within current template
+      _shuffleDepth = newDepth;
+    }
   }
   else if (events.live_encoderTurned) {
     // BPM control with velocity-based smooth acceleration
@@ -322,8 +417,12 @@ int EngineMode2::getMaxPatterns() const {
   return (int)ArpPattern::MAX_PATTERNS;
 }
 
-float EngineMode2::getGateLength() const {
-  return _gateLength;
+uint8_t EngineMode2::getTemplate() const {
+  return _shuffleTemplate;
+}
+
+float EngineMode2::getShuffleDepth() const {
+  return _shuffleDepth;
 }
 
 // Private helper methods
@@ -334,7 +433,12 @@ void EngineMode2::resetPattern() {
   _octaveToggle = false;
   _cascadeCount = 0;
   _pedalIndex = 0;
+  _waveOctave = 0;
+  _waveDirection = true;
+  _alphaOctave = -2;
+  _bounceState = false;
   _lastStepTime = millis();
+  _shuffleStepCounter = 0;  // Reset shuffle counter
 }
 
 void EngineMode2::stepToNext() {
@@ -376,6 +480,15 @@ void EngineMode2::stepToNext() {
       break;
     case ArpPattern::PROBABILITY:
       stepPatternProbability();
+      break;
+    case ArpPattern::OCTAVE_WAVE:
+      stepPatternOctaveWave();
+      break;
+    case ArpPattern::OCTAVE_ALPHA:
+      stepPatternOctaveAlpha();
+      break;
+    case ArpPattern::OCTAVE_BOUNCE:
+      stepPatternOctaveBounce();
       break;
     default:
       stepPatternUp();
@@ -568,17 +681,71 @@ void EngineMode2::stepPatternProbability() {
   }
 }
 
+void EngineMode2::stepPatternOctaveWave() {
+  _arpIndex++;
+  if (_arpIndex >= _arpCount) {
+    _arpIndex = 0;
+    // Move octave in a wave pattern: 0, 1, 2, 1, 0, -1, -2, -1, 0...
+    if (_waveDirection) {
+      _waveOctave++;
+      if (_waveOctave >= 2) {
+        _waveDirection = false;
+      }
+    } else {
+      _waveOctave--;
+      if (_waveOctave <= -2) {
+        _waveDirection = true;
+      }
+    }
+  }
+}
+
+void EngineMode2::stepPatternOctaveAlpha() {
+  _arpIndex++;
+  if (_arpIndex >= _arpCount) {
+    _arpIndex = 0;
+    _alphaOctave++;
+    if (_alphaOctave > 2) {
+      _alphaOctave = -2;
+    }
+  }
+}
+
+void EngineMode2::stepPatternOctaveBounce() {
+  if (_bounceState) {
+    // High note played, move to next note
+    _arpIndex++;
+    if (_arpIndex >= _arpCount) {
+      _arpIndex = 0;
+    }
+  }
+  _bounceState = !_bounceState;
+}
+
 void EngineMode2::updatePitchFromCurrentNote() {
   // Add bounds check for safety
   if (_arpCount > 0 && _arpIndex >= 0 && _arpIndex < _arpCount) {
-    // Check if we need octave shift for certain patterns
-    if ((_currentPattern == ArpPattern::UP_OCTAVE || 
-         _currentPattern == ArpPattern::DOWN_OCTAVE) && _octaveToggle) {
-      int octaveShift = (_currentPattern == ArpPattern::UP_OCTAVE) ? 1 : -1;
-      _targetPitchVoltage = midiNoteToVoltageWithOctave(_arpNotes[_arpIndex], octaveShift);
-    } else {
-      _targetPitchVoltage = midiNoteToVoltage(_arpNotes[_arpIndex]);
+    int octaveShift = 0;
+    switch (_currentPattern) {
+      case ArpPattern::UP_OCTAVE:
+      case ArpPattern::DOWN_OCTAVE:
+        if (_octaveToggle) {
+          octaveShift = (_currentPattern == ArpPattern::UP_OCTAVE) ? 1 : -1;
+        }
+        break;
+      case ArpPattern::OCTAVE_WAVE:
+        octaveShift = _waveOctave;
+        break;
+      case ArpPattern::OCTAVE_ALPHA:
+        octaveShift = _alphaOctave;
+        break;
+      case ArpPattern::OCTAVE_BOUNCE:
+        octaveShift = _bounceState ? 2 : -2;
+        break;
+      default:
+        break;
     }
+    _targetPitchVoltage = midiNoteToVoltageWithOctave(_arpNotes[_arpIndex], octaveShift);
   }
 }
 
@@ -641,6 +808,7 @@ void EngineMode2::sortArpNotes() {
 
 void EngineMode2::setLatch(bool enabled, const bool* physicalKeyState) {
   _latchEnabled = enabled;
+  _shuffleStepCounter = 0;  // Reset shuffle counter on latch toggle
   
   if (!_latchEnabled && physicalKeyState != nullptr) {
     // Remove notes that are no longer physically pressed

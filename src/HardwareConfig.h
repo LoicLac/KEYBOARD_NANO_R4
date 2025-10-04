@@ -7,7 +7,7 @@
 // =================================================================
 // 1. SYSTEME & DEBUG
 // =================================================================
-#define DEBUG_LEVEL 0
+#define DEBUG_LEVEL 2
 
 enum GameMode {
   MODE_PRESSURE_GLIDE,
@@ -15,7 +15,7 @@ enum GameMode {
   MODE_MIDI
 };
 
-enum class UIEffect { NONE, VALIDATE, MODE_CHANGE_CHASE, MODE_CHANGE_CROSSFADE, MODE_CHANGE_INWARD_WIPE };
+enum class UIEffect { NONE, VALIDATE, ARP_PATTERN_CHANGE, MODE_CHANGE_CHASE, MODE_CHANGE_CROSSFADE, MODE_CHANGE_INWARD_WIPE };
 enum class ButtonID { HOLD, MODE, OCT_PLUS, OCT_MINUS };
 enum class PotID { SENS }; // LIVE removed - replaced by encoder
 enum class ButtonState { PRESS_SHORT, PRESS_LONG, RELEASED };
@@ -70,6 +70,62 @@ const unsigned long ENCODER_DEBOUNCE_TIME_MS = 2;  // Debounce time for encoder 
 // Adjust this value (150-300ms recommended) to change double-tap sensitivity
 // Lower = faster tap required, Higher = more forgiving timing
 const unsigned long ARP_DOUBLE_TAP_WINDOW_MS = 250;  // Default: 250ms
+
+// =================================================================
+// SHUFFLE / GROOVE ENGINE (Mode 2)
+// =================================================================
+// Shuffle templates: timing offsets as percentage of step time
+// Positive = delay note, Negative = advance note
+// Pattern repeats every 8 steps
+const int8_t SHUFFLE_TEMPLATE_COUNT = 5;
+const int8_t SHUFFLE_STEPS_PER_CYCLE = 8;
+
+// Template 1: Extended 16th Swing
+// Classic swing extended over 16 steps with slight variation
+constexpr int8_t SHUFFLE_TEMPLATE_1[16] = {
+  0, 0, 50, 0, 0, 0, 50, 0,
+  0, 0, 55, 0, 0, 0, 45, 0   // Slight variation in second half
+};
+
+// Template 2: Rolling 8th Swing
+// Alternating delays with gradual intensity build and release
+constexpr int8_t SHUFFLE_TEMPLATE_2[16] = {
+  0, 36, 0, 36, 0, 36, 0, 36,
+  0, 40, 0, 40, 0, 40, 0, 30   // Builds then releases
+};
+
+// Template 3: Long Triplet Wave
+// Dotted feel with breathing dynamics over 16 steps
+constexpr int8_t SHUFFLE_TEMPLATE_3[16] = {
+  0, 0, 75, 0, 0, 75, 0, 0,
+  0, 0, 80, 0, 0, 70, 0, 0   // Peak then relax
+};
+
+// Template 4: Polyrhythmic Gallop (3-3-2 clave over 16)
+// Creates evolving 3-3-2 pattern that phases with 16-step grid
+constexpr int8_t SHUFFLE_TEMPLATE_4[16] = {
+  0, 0, 45, 0, 0, 45, 0, 60,
+  0, 0, 50, 0, 0, 40, 0, 55   // Second phrase variation
+};
+
+// Template 5: Neo-Soul Pocket (J Dilla / D'Angelo inspired)
+// Complex 16-step groove with unpredictable delays
+constexpr int8_t SHUFFLE_TEMPLATE_5[16] = {
+  0, 20, 50, 10, 40, 0, 60, 15,
+  5, 25, 45, 0, 35, 10, 55, 20   // Second half complements first
+};
+
+// Lookup table for all templates
+constexpr const int8_t* SHUFFLE_TEMPLATES[5] = {
+  SHUFFLE_TEMPLATE_1,
+  SHUFFLE_TEMPLATE_2,
+  SHUFFLE_TEMPLATE_3,
+  SHUFFLE_TEMPLATE_4,
+  SHUFFLE_TEMPLATE_5
+};
+
+const float SHUFFLE_DEPTH_MAX = 0.9f;  // Maximum 90% timing shift
+const float SHUFFLE_DEPTH_STEP = 0.005f; // 0.5% per encoder click (100 clicks = 4 turns for full sweep)
 
 // =================================================================
 // ENCODER ACCELERATION CURVES (Velocity-Based Control)

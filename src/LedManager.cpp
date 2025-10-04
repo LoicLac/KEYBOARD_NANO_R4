@@ -12,6 +12,25 @@ const uint32_t BARGRAPH_EXPIRY_MS   = 1000;
 const uint32_t BARGRAPH_RATE_LIMIT_MS = 30;
 const uint32_t STATIC_BLINK_PERIOD_MS = 150;
 
+const uint8_t PATTERN_DISPLAY_LOOKUP[16] = {
+  0b00000, // 0 - Off, unused but good for indexing
+  0b10000, // 1
+  0b01000, // 2
+  0b00100, // 3
+  0b00010, // 4
+  0b00001, // 5
+  0b11000, // 6
+  0b01100, // 7
+  0b00110, // 8
+  0b00011, // 9
+  0b11100, // 10
+  0b01110, // 11
+  0b00111, // 12
+  0b11110, // 13
+  0b01111, // 14
+  0b11111  // 15
+};
+
 // =================================================================
 // Lifecycle
 // =================================================================
@@ -135,6 +154,11 @@ void LedManager::playCountdown(uint16_t duration_ms) {
   setAllLedsOff();
 }
 
+void LedManager::playPatternDisplay(int patternIndex) {
+    requestedFX = FX_PATTERN_DISPLAY;
+    req_fx_param_pattern_index = patternIndex;
+}
+
 // =================================================================
 // Engine
 // =================================================================
@@ -142,8 +166,14 @@ void LedManager::update() {
   unsigned long currentTime = millis();
 
   bool isBargraphRefresh = ((requestedFX == FX_BARGRAPH || requestedFX == FX_INVERTED_BARGRAPH) && (currentFX == FX_BARGRAPH || currentFX == FX_INVERTED_BARGRAPH));
-  if (requestedFX != FX_NONE && !isBargraphRefresh && currentTime >= fx_minVisibleUntil) {
+  bool isPatternRefresh = (requestedFX == FX_PATTERN_DISPLAY && currentFX == FX_PATTERN_DISPLAY);
+  if (requestedFX != FX_NONE && !isBargraphRefresh && !isPatternRefresh && currentTime >= fx_minVisibleUntil) {
     startNewEffect(currentTime);
+  }
+  
+  // Allow pattern display to update continuously during long press
+  if (isPatternRefresh) {
+    fx_param_pattern_index = req_fx_param_pattern_index;
   }
 
   applyAndRender(currentTime);
@@ -163,6 +193,8 @@ void LedManager::startNewEffect(unsigned long currentTime) {
     fx_param_bargraph_value = req_fx_param_bargraph_value;
     bargraph_lastUpdateTime = currentTime;
     bargraph_lastRenderTime = 0;
+  } else if (currentFX == FX_PATTERN_DISPLAY) {
+    fx_param_pattern_index = req_fx_param_pattern_index;
   }
 }
 
@@ -310,6 +342,25 @@ void LedManager::applyAndRender(unsigned long currentTime) {
             analogWrite(LED_PINS[2], 255);
         }
         break;
+    }
+    case FX_PATTERN_DISPLAY: {
+      uint32_t totalDuration = 500; // Display for 500ms
+      if (elapsedTime >= totalDuration) { effectFinished = true; break; }
+      
+      // Pattern index 0-14 (15 patterns) maps to lookup table entries 1-15
+      // (lookup[0] is unused, reserved for "off")
+      if (fx_param_pattern_index >= 0 && fx_param_pattern_index <= 14) {
+        uint8_t pattern = PATTERN_DISPLAY_LOOKUP[fx_param_pattern_index + 1];
+        for (int i = 0; i < NUM_LEDS; i++) {
+          // Read bits from left to right (MSB to LSB)
+          if ((pattern >> (4-i)) & 0x01) {
+            analogWrite(LED_PINS[i], 255);
+          } else {
+            analogWrite(LED_PINS[i], 0);
+          }
+        }
+      }
+      break;
     }
     case FX_NONE:
       break;
